@@ -14,32 +14,49 @@ Built and tested with Python 3.12.
 
 ## Running
 
-    python3 poker_agent.py equity      # Monte Carlo equity sanity checks
-    python3 poker_agent.py baseline    # rule-based baseline vs random opponent
-    python3 poker_agent.py train       # DQN training loop (logs + learning curve)
+`main.py` is the entry point. Each mode runs one part of the pipeline:
 
-Training output (CSV log and learning-curve plot) is written to `experiments/`.
+    python3 main.py equity      # Monte Carlo equity sanity checks
+    python3 main.py features    # feature vector for a sample state
+    python3 main.py baseline    # rule-based baseline vs random (per-hand average)
+    python3 main.py match       # 100-hand matches with persistent bankroll
+    python3 main.py train       # DQN training loop (logs + learning curve)
 
-## Structure of poker_agent.py
+Match logs and training output are written to `experiments/`.
 
-- Hand evaluation + Monte Carlo equity: 5- and 7-card evaluator and
-  `hand_equity()`, which estimates win probability by random rollouts of the
-  unseen cards.
-- Rule-based baseline agent: `RuleBasedAgent` acts on estimated equity versus
-  pot odds. This is the baseline the learning agent must beat.
-- Environment + training: `make_env()` sets up the RLCard heads-up No-Limit
-  Hold'em environment; `train()` runs the training loop.
+## Files
+
+- `equity.py` - hand evaluation and Monte Carlo equity estimation.
+- `features.py` - the state feature extractor phi(state).
+- `agents.py` - the rule-based baseline agent (equity vs pot odds).
+- `match.py` - environment setup and the 100-hand match harness that carries
+  chip stacks across hands and stops on bankruptcy, with CSV logging.
+- `train.py` - the reinforcement-learning training loop (placeholder DQN for
+  now, to be replaced by our own agent).
+- `main.py` - command-line entry point that runs each mode.
 
 ## Status
 
 Done:
 - Monte Carlo equity estimator (AA preflop ~0.85, 72o ~0.35, AKs ~0.67).
-- Rule-based baseline agent. Over a 2000-hand match it beats a random opponent
-  by about +31 chips per hand.
+- State feature extractor phi(state): equity, pot odds, stack-to-pot ratio,
+  stack share, betting round, position.
+- Rule-based baseline agent. Over a 2000-hand run it beats a random opponent by
+  about +31 chips per hand, and wins about 64% of full 100-hand matches
+  (averaged over 50 seeded, reproducible matches).
+- 100-hand match harness with persistent bankroll and CSV logging.
 - Training loop runs end to end and plots a learning curve.
 
 In progress:
-- Team-built learning agent (the DQN in the loop is a placeholder for now).
-- State feature extractor and the supervised classifier on real hand histories.
-- Match harness that carries chip stacks across hands, since RLCard resets both
-  stacks every hand and does not model a persistent bankroll on its own.
+- Our own reinforcement-learning agent (the DQN in the loop is a placeholder).
+  We start from a linear Q-learning update over phi(state), then move to a
+  neural network.
+- Opponent-tendency features with a Bayesian prior, added to phi(state).
+
+## Notes
+
+- RLCard treats one game as one hand and resets both stacks each hand, so the
+  persistent bankroll and bankruptcy condition are handled by the match harness
+  in `match.py`, not by RLCard itself.
+- At $500 stacks with $1/$2 blinds a single all-in swings up to 500 chips, so
+  individual matches are high variance. Results are reported over many matches.
