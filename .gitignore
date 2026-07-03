@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+experiments/*
+!experiments/.gitkeep
+.DS_Store
