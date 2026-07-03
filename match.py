@@ -8,9 +8,32 @@ from rlcard.utils import set_seed
 from agents import RuleBasedAgent
 
 
+NUM_PLAYERS = 2
+STARTING_STACK = 500
+SMALL_BLIND = 1
+BIG_BLIND = 2
+
+
+def _enforce_blinds(env):
+    game = getattr(env, 'game', None)
+    if game is None or not hasattr(game, 'small_blind') or not hasattr(game, 'big_blind'):
+        raise RuntimeError('RLCard no-limit-holdem game does not expose blind attributes')
+    game.small_blind = SMALL_BLIND
+    game.big_blind = BIG_BLIND
+    if game.small_blind != SMALL_BLIND or game.big_blind != BIG_BLIND:
+        raise RuntimeError('Failed to enforce small blind 1 and big blind 2 in RLCard environment')
+
+
 def make_env(seed=None):
-    config = {'game_num_players': 2, 'chips_for_each': 500, 'dealer_id': None, 'seed': seed}
-    return rlcard.make('no-limit-holdem', config=config)
+    config = {
+        'game_num_players': NUM_PLAYERS,
+        'chips_for_each': STARTING_STACK,
+        'dealer_id': None,
+        'seed': seed,
+    }
+    env = rlcard.make('no-limit-holdem', config=config)
+    _enforce_blinds(env)
+    return env
 
 
 def make_opponent(env, kind):

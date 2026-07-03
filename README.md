@@ -67,3 +67,5 @@ In progress:
   in `match.py`, not by RLCard itself.
 - At $500 stacks with $1/$2 blinds a single all-in swings up to 500 chips, so
   individual matches are high variance. Results are reported over many matches.
+
+- Blind verification: `match.py` explicitly enforces `$1/$2` blinds in `make_env()` by setting RLCard's `env.game.small_blind = 1` and `env.game.big_blind = 2` after environment creation. It also keeps `game_num_players: 2` and `chips_for_each: 500`.
