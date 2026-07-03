@@ -7,6 +7,7 @@ from equity import hand_equity
 from features import extract_features, FEATURE_NAMES
 from agents import RuleBasedAgent
 from match import make_env, play_match
+from classifier import train_classifier
 from train import train
 
 
@@ -56,6 +57,7 @@ MODES = {
     'equity': equity_checks,
     'features': feature_demo,
     'baseline': evaluate_baseline,
+    'classifier': train_classifier,
     'match': run_match,
     'train': train,
 }
