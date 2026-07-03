@@ -27,7 +27,7 @@ def feature_demo():
 
 def evaluate_baseline(hands=2000):
     set_seed(42)
-    env = make_env()
+    env = make_env(seed=42)
     env.set_agents([RuleBasedAgent(iters=150, seed=42), RandomAgent(num_actions=env.num_actions)])
     payoffs = tournament(env, hands)
     print('rule-based avg chips/hand:', round(payoffs[0], 3))
