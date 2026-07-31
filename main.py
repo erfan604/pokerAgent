@@ -1,3 +1,4 @@
+import os
 import sys
 
 from rlcard.agents import RandomAgent
@@ -9,6 +10,8 @@ from agents import RuleBasedAgent
 from match import make_env, play_match
 from classifier import train_classifier
 from train import train
+from qlearn import train_qlearn
+from opponentModeling import OpponentModel, updateFromTrajectory, OPPONENT_FEATURES
 
 
 def equity_checks():
@@ -53,6 +56,55 @@ def run_match(num_matches=50, hands=100):
     print('sample match log written to experiments/match_log.csv')
 
 
+def opponent_demo(num_hands=200, iters=80, seed=0, out_dir='experiments'):
+    set_seed(seed)
+    env = make_env(seed=seed)
+    hero = RuleBasedAgent(iters=iters, seed=seed)
+    villain = RuleBasedAgent(iters=iters, seed=seed + 1)
+    env.set_agents([hero, villain])
+    model = OpponentModel()
+    for _ in range(num_hands):
+        state, player = env.reset()
+        traj = []
+        while not env.is_over():
+            agent = env.agents[player]
+            action = agent.step(state)
+            if player == 1:
+                traj.append(state)
+                traj.append(action)
+            state, player = env.step(action, agent.use_raw)
+        updateFromTrajectory(model, traj, env)
+
+    names = list(OPPONENT_FEATURES)
+    values = [float(v) for v in model.features()]
+    report = '\n'.join(
+        [f'opponent model after {num_hands} hands (seed {seed}):']
+        + [f'  {n:16s} {v:.3f}' for n, v in zip(names, values)]
+    )
+    print(report)
+
+    os.makedirs(out_dir, exist_ok=True)
+    with open(os.path.join(out_dir, 'opponent_model.txt'), 'w') as f:
+        f.write(report + '\n')
+
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    fig, ax = plt.subplots(figsize=(6, 3.5))
+    ax.barh(names, values)
+    ax.set_xlim(0, 1)
+    ax.set_xlabel('posterior mean (Beta-Binomial)')
+    ax.set_title(f'Estimated opponent tendencies ({num_hands} hands)')
+    for i, v in enumerate(values):
+        ax.text(min(v + 0.02, 0.95), i, f'{v:.2f}', va='center')
+    ax.invert_yaxis()
+    fig.tight_layout()
+    fig.savefig(os.path.join(out_dir, 'opponent_model.png'), dpi=150)
+    plt.close(fig)
+    print(f'wrote {out_dir}/opponent_model.txt and {out_dir}/opponent_model.png')
+    return model
+
+
 MODES = {
     'equity': equity_checks,
     'features': feature_demo,
@@ -60,6 +112,8 @@ MODES = {
     'classifier': train_classifier,
     'match': run_match,
     'train': train,
+    'opponent': opponent_demo,
+    'qlearn': train_qlearn,
 }
 
 if __name__ == '__main__':
