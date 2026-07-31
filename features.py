@@ -5,8 +5,17 @@ from equity import hand_equity
 FEATURE_NAMES = ['equity', 'pot_odds', 'spr', 'stack_share',
                  'is_preflop', 'is_flop', 'is_turn', 'is_river', 'position']
 
+OPPONENT_FEATURE_NAMES = ['opp_vpip', 'opp_pfr', 'opp_agg_flop', 'opp_agg_turn',
+                          'opp_agg_river', 'opp_fold_to_bet']
 
-def extract_features(state, position=0.5, iters=200, seed=None):
+
+def feature_names(with_opponent=False):
+    if with_opponent:
+        return FEATURE_NAMES + OPPONENT_FEATURE_NAMES
+    return list(FEATURE_NAMES)
+
+
+def extract_features(state, position=0.5, iters=200, seed=None, opp_features=None):
     obs = state['raw_obs']
     me = obs['current_player']
     equity = hand_equity(obs['hand'], obs['public_cards'], iters=iters, seed=seed)
@@ -21,4 +30,7 @@ def extract_features(state, position=0.5, iters=200, seed=None):
     stage = [0, 0, 0, 0]
     if stage_idx < 4:
         stage[stage_idx] = 1
-    return np.array([equity, pot_odds, spr, stack_share, *stage, position], dtype=float)
+    base = np.array([equity, pot_odds, spr, stack_share, *stage, position], dtype=float)
+    if opp_features is None:
+        return base
+    return np.concatenate([base, np.asarray(opp_features, dtype=float)])

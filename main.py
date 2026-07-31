@@ -5,10 +5,10 @@ from rlcard.agents import RandomAgent
 from rlcard.utils import tournament, set_seed
 
 from equity import hand_equity
-from features import extract_features, FEATURE_NAMES
+from features import extract_features, feature_names, FEATURE_NAMES
 from agents import RuleBasedAgent
 from match import make_env, play_match
-from classifier import train_classifier
+from classifier import train_classifier, train_mlp_classifier, tune_mlp
 from train import train
 from qlearn import train_qlearn
 from opponentModeling import OpponentModel, updateFromTrajectory, OPPONENT_FEATURES
@@ -105,6 +105,39 @@ def opponent_demo(num_hands=200, iters=80, seed=0, out_dir='experiments'):
     return model
 
 
+def integrated_demo(num_hands=60, iters=60, seed=0, show=3):
+    set_seed(seed)
+    env = make_env(seed=seed)
+    hero = RuleBasedAgent(iters=iters, seed=seed)
+    villain = RuleBasedAgent(iters=iters, seed=seed + 1)
+    env.set_agents([hero, villain])
+    model = OpponentModel()
+    names = feature_names(with_opponent=True)
+    samples = []
+    for hand in range(num_hands):
+        state, player = env.reset()
+        traj = []
+        while not env.is_over():
+            agent = env.agents[player]
+            action = agent.step(state)
+            if player == 1:
+                traj.append(state)
+                traj.append(action)
+            elif (hand >= num_hands - show and len(samples) < show
+                    and (not samples or samples[-1][0] != hand + 1)):
+                phi = extract_features(state, iters=iters, seed=seed,
+                                       opp_features=model.features())
+                samples.append((hand + 1, phi))
+            state, player = env.step(action, agent.use_raw)
+        updateFromTrajectory(model, traj, env)
+    print(f'state features with opponent model appended ({len(names)} total):')
+    for hand, phi in samples:
+        print(f'  hand {hand}:')
+        for name, value in zip(names, phi):
+            print(f'    {name:16s} {value:.3f}')
+    print(f'\nbase features: {len(FEATURE_NAMES)}   with opponent model: {len(names)}')
+
+
 MODES = {
     'equity': equity_checks,
     'features': feature_demo,
@@ -114,6 +147,9 @@ MODES = {
     'train': train,
     'opponent': opponent_demo,
     'qlearn': train_qlearn,
+    'mlp': train_mlp_classifier,
+    'tune': tune_mlp,
+    'integrated': integrated_demo,
 }
 
 if __name__ == '__main__':

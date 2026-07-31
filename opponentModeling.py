@@ -11,7 +11,10 @@ OPPONENT_FEATURES = ['opp_vpip', 'opp_pfr', 'opp_agg_flop', 'opp_agg_turn',
                      'opp_agg_river', 'opp_fold_to_bet']
 
 class OpponentModel:
-    def __init__(self, priorAlpha=2.0, priorBeta=2.0):
+    def __init__(self, priorAlpha=2.0, priorBeta=2.0, decay=1.0):
+        self.priorAlpha = priorAlpha
+        self.priorBeta = priorBeta
+        self.decay = decay
         self.stats = {
             'vpip':[priorAlpha, priorBeta],
             'pfr':[priorAlpha, priorBeta],
@@ -23,6 +26,9 @@ class OpponentModel:
 
     def _bump(self, key, success):
         a, b = self.stats[key]
+        if self.decay < 1.0:
+            a = self.priorAlpha + (a - self.priorAlpha) * self.decay
+            b = self.priorBeta + (b - self.priorBeta) * self.decay
         self.stats[key] = [a + (1.0 if success else 0.0),
                            b + (0.0 if success else 1.0)]
 
@@ -55,8 +61,12 @@ def facedRaise(obs):
     toCall = max(obs['all_chips']) - obs['my_chips']
     return toCall > 0
 
-def updateFromTrajectory(OpponentModel, trajectory, env):
-    for state, action in zip(trajectory[0::2], trajectory[1::2]):
+def updateFromTrajectory(model, trajectory, env):
+    for i in range(len(trajectory) - 1):
+        state, action = trajectory[i], trajectory[i + 1]
+        if not isinstance(state, dict) or 'raw_obs' not in state:
+            continue
+        if isinstance(action, dict):
+            continue
         obs = state['raw_obs']
-        name = actionName(action, env)
-        OpponentModel.update(obs, name, facedRaise(obs))
+        model.update(obs, actionName(action, env), facedRaise(obs))
