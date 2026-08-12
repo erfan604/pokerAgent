@@ -20,38 +20,75 @@ from rlcard.utils import set_seed
 from features import extract_features
 from agents import RuleBasedAgent
 from match import make_env
+from opponentModeling import OpponentModel, updateFromTrajectory
 
 
-def collect_data(num_hands=1000, iters=80, seed=0, return_groups=False):
+def collect_data(num_hands=1000, iters=80, seed=0, return_groups=False, with_opponent=True):
     set_seed(seed)
     env = make_env(seed=seed)
     teacher = RuleBasedAgent(iters=iters, seed=seed)
     opp = RandomAgent(num_actions=env.num_actions)
     env.set_agents([teacher, opp])
+    model = OpponentModel() if with_opponent else None
     features = []
     labels = []
     groups = []
     for hand in range(num_hands):
         state, player = env.reset()
+        traj = []
         while not env.is_over():
             agent = env.agents[player]
             if player == 0:
-                features.append(extract_features(state, iters=iters, seed=seed))
+                opp_feats = model.features() if model is not None else None
+                features.append(extract_features(state, iters=iters, seed=seed,
+                                                 opp_features=opp_feats))
                 action = teacher.step(state)
                 labels.append(action.name)
                 groups.append(hand)
             else:
+                traj.append(state)
                 action = agent.step(state)
+                traj.append(action)
             state, player = env.step(action, agent.use_raw)
+        if model is not None:
+            updateFromTrajectory(model, traj, env)
     if return_groups:
         return np.array(features), np.array(labels), np.array(groups)
     return np.array(features), np.array(labels)
 
 
-def train_classifier(num_hands=1000, iters=80, seed=0):
-    X, y = collect_data(num_hands=num_hands, iters=iters, seed=seed)
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=seed)
-    clf = DecisionTreeClassifier(max_depth=6, random_state=seed)
+def grouped_split(X, y, groups, classes, test_size=0.2, seed=0, tries=10):
+    splitter = GroupShuffleSplit(n_splits=tries, test_size=test_size, random_state=seed)
+    for train_idx, test_idx in splitter.split(X, y, groups):
+        if len(np.setdiff1d(classes, np.unique(y[train_idx]))) == 0:
+            return train_idx, test_idx
+    raise ValueError('no grouped split keeps every action class in the training set')
+
+
+def balanced_index(y, seed):
+    rng = np.random.RandomState(seed)
+    classes, counts = np.unique(y, return_counts=True)
+    target = int(counts.max())
+    picks = []
+    for value in classes:
+        pool = np.flatnonzero(y == value)
+        picks.append(pool)
+        short = target - len(pool)
+        if short > 0:
+            picks.append(rng.choice(pool, short, replace=True))
+    order = np.concatenate(picks)
+    rng.shuffle(order)
+    return order
+
+
+def train_classifier(num_hands=1000, iters=80, seed=0, with_opponent=True):
+    X, y, groups = collect_data(num_hands=num_hands, iters=iters, seed=seed,
+                                return_groups=True, with_opponent=with_opponent)
+    classes = np.unique(y)
+    train_idx, test_idx = grouped_split(X, y, groups, classes, seed=seed)
+    X_train, X_test = X[train_idx], X[test_idx]
+    y_train, y_test = y[train_idx], y[test_idx]
+    clf = DecisionTreeClassifier(max_depth=6, random_state=seed, class_weight='balanced')
     clf.fit(X_train, y_train)
     pred = clf.predict(X_test)
     labels = sorted(set(str(v) for v in y))
@@ -65,9 +102,11 @@ def train_classifier(num_hands=1000, iters=80, seed=0):
     return clf
 
 
-def train_mlp_classifier(num_hands=1000, iters=80, seed=0, group_split=False,
-                         hidden_layer_sizes=(32,), save=True, out_dir='experiments'):
-    X, y, groups = collect_data(num_hands=num_hands, iters=iters, seed=seed, return_groups=True)
+def train_mlp_classifier(num_hands=4000, iters=80, seed=0, group_split=True,
+                         hidden_layer_sizes=(32,), save=True, out_dir='experiments',
+                         with_opponent=True, balance=True):
+    X, y, groups = collect_data(num_hands=num_hands, iters=iters, seed=seed,
+                                return_groups=True, with_opponent=with_opponent)
     if X.ndim != 2 or len(X) < 2:
         raise ValueError('MLP training requires at least two feature rows')
 
@@ -85,8 +124,8 @@ def train_mlp_classifier(num_hands=1000, iters=80, seed=0, group_split=False,
     )
     stratify = y if can_stratify else None
     if group_split:
-        splitter = GroupShuffleSplit(n_splits=1, test_size=test_size, random_state=seed)
-        train_idx, test_idx = next(splitter.split(X, y, groups))
+        train_idx, test_idx = grouped_split(X, y, groups, classes,
+                                            test_size=test_size, seed=seed)
         X_train, X_test = X[train_idx], X[test_idx]
         y_train, y_test = y[train_idx], y[test_idx]
         can_stratify = False
@@ -105,11 +144,17 @@ def train_mlp_classifier(num_hands=1000, iters=80, seed=0, group_split=False,
         missing = ', '.join(str(value) for value in missing_classes)
         raise ValueError(f'Training split is missing action classes: {missing}')
 
+    if balance:
+        order = balanced_index(y_train, seed)
+        X_train, y_train = X_train[order], y_train[order]
+        train_classes, train_class_counts = np.unique(y_train, return_counts=True)
+
     validation_fraction = 0.1
     validation_count = int(np.ceil(len(y_train) * validation_fraction))
     internal_train_count = len(y_train) - validation_count
-    early_stopping_enabled = (
-        np.all(train_class_counts >= 2)
+    early_stopping_enabled = bool(
+        not balance
+        and np.all(train_class_counts >= 2)
         and validation_count >= len(train_classes)
         and internal_train_count >= len(train_classes)
     )
@@ -169,6 +214,13 @@ def train_mlp_classifier(num_hands=1000, iters=80, seed=0, group_split=False,
         'training_iterations': int(mlp.n_iter_),
         'loss_curve': loss_curve,
         'validation_scores': validation_scores,
+        'macro_f1': float(f1_score(y_test, pred, average='macro')),
+        'macro_f1_tested': float(f1_score(y_test, pred, average='macro',
+                                          labels=np.unique(y_test), zero_division=0)),
+        'opponent_features': bool(with_opponent),
+        'balanced_training_set': bool(balance),
+        'test_class_distribution': {str(c): int(n) for c, n in
+                                    zip(*np.unique(y_test, return_counts=True))},
     }
 
     print(f'collected {len(X)} decisions across {num_hands} hands')
@@ -178,7 +230,13 @@ def train_mlp_classifier(num_hands=1000, iters=80, seed=0, group_split=False,
     print(f'actions seen: {labels}')
     print(f'stratified split: {can_stratify}')
     print(f'early stopping enabled: {early_stopping_enabled}')
+    print(f'grouped split by hand: {group_split}')
+    print(f'opponent features: {with_opponent}')
+    print(f'balanced training set: {balance}')
     print(f'test accuracy: {accuracy:.3f}')
+    print(f'macro F1 (all {len(classes)} classes): {results["macro_f1"]:.3f}')
+    print(f'macro F1 (classes present in test): {results["macro_f1_tested"]:.3f}')
+    print(f'test class distribution: {results["test_class_distribution"]}')
     print('confusion matrix (rows = true, cols = predicted):')
     print(labels)
     print(matrix)
@@ -210,7 +268,9 @@ def _save_artifacts(results, matrix, labels, loss_curve, validation_scores, y, o
     payload = {
         'configuration': {
             'command': (f'train_mlp_classifier(num_hands={num_hands}, iters={iters}, '
-                        f'seed={seed}, group_split={group_split})'),
+                        f'seed={seed}, group_split={group_split}, '
+                        f'with_opponent={results["opponent_features"]}, '
+                        f'balance={results["balanced_training_set"]})'),
             'seed': seed,
             'num_hands': num_hands,
             'equity_iterations': iters,
@@ -224,6 +284,8 @@ def _save_artifacts(results, matrix, labels, loss_curve, validation_scores, y, o
             'n_iter_no_change': 20,
             'random_state': seed,
             'group_split_by_hand': group_split,
+            'opponent_features': results['opponent_features'],
+            'balanced_training_set': results['balanced_training_set'],
         },
         'environment': {
             'python': sys.version.split()[0],
@@ -252,15 +314,18 @@ def _save_artifacts(results, matrix, labels, loss_curve, validation_scores, y, o
             'decreasing_step_fraction': float(np.mean(steps < 0)) if len(steps) else 0.0,
             'loss_curve': loss_curve,
             'validation_scores': validation_scores,
+            'macro_f1': results['macro_f1'],
+            'macro_f1_tested': results['macro_f1_tested'],
+            'test_class_distribution': results['test_class_distribution'],
         },
         'warnings': [],
     }
-    header = 'Milestone 2 Proof 1 - Standalone MLP Classifier\n' + '=' * 49 + '\n\n'
+    header = 'Standalone MLP Classifier\n' + '=' * 25 + '\n\n'
     with open(os.path.join(out_dir, 'mlp_results.txt'), 'w') as f:
         f.write(header + json.dumps(payload, indent=2) + '\n')
 
     fig, ax = plt.subplots(figsize=(7, 4.5))
-    ax.plot(loss_curve)
+    ax.plot(loss_curve, color='darkgreen')
     ax.set_xlabel('Iteration')
     ax.set_ylabel('Training loss')
     ax.set_title('Standalone MLP Training Loss')
@@ -270,7 +335,7 @@ def _save_artifacts(results, matrix, labels, loss_curve, validation_scores, y, o
 
     fig, ax = plt.subplots(figsize=(8, 6))
     ConfusionMatrixDisplay(confusion_matrix=matrix, display_labels=labels).plot(
-        cmap='Blues', ax=ax, colorbar=False, xticks_rotation=45)
+        cmap='Greens', ax=ax, colorbar=False, xticks_rotation=45)
     ax.set_title('Standalone MLP Test Confusion Matrix')
     fig.tight_layout()
     fig.savefig(os.path.join(out_dir, 'mlp_confusion_matrix.png'), dpi=150)
@@ -278,10 +343,11 @@ def _save_artifacts(results, matrix, labels, loss_curve, validation_scores, y, o
     print(f'wrote {out_dir}/mlp_results.txt, mlp_loss_curve.png, mlp_confusion_matrix.png')
 
 
-def tune_mlp(num_hands=1000, iters=80, seed=0, group_split=True):
-    X, y, groups = collect_data(num_hands=num_hands, iters=iters, seed=seed, return_groups=True)
-    splitter = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=seed)
-    train_idx, test_idx = next(splitter.split(X, y, groups))
+def tune_mlp(num_hands=1000, iters=80, seed=0, with_opponent=True, balance=True):
+    X, y, groups = collect_data(num_hands=num_hands, iters=iters, seed=seed,
+                                return_groups=True, with_opponent=with_opponent)
+    classes = np.unique(y)
+    train_idx, test_idx = grouped_split(X, y, groups, classes, seed=seed)
     grid = {
         'mlp__hidden_layer_sizes': [(16,), (32,), (64,), (32, 16)],
         'mlp__alpha': [1e-4, 1e-3, 1e-2],
@@ -292,12 +358,18 @@ def tune_mlp(num_hands=1000, iters=80, seed=0, group_split=True):
     ])
     inner = GroupShuffleSplit(n_splits=3, test_size=0.2, random_state=seed)
     search = GridSearchCV(pipe, grid, cv=inner, scoring='f1_macro', n_jobs=-1)
+    X_fit, y_fit, g_fit = X[train_idx], y[train_idx], groups[train_idx]
+    if balance:
+        order = balanced_index(y_fit, seed)
+        X_fit, y_fit, g_fit = X_fit[order], y_fit[order], g_fit[order]
     with warnings.catch_warnings():
         warnings.simplefilter('ignore', ConvergenceWarning)
-        search.fit(X[train_idx], y[train_idx], groups=groups[train_idx])
+        search.fit(X_fit, y_fit, groups=g_fit)
     pred = search.best_estimator_.predict(X[test_idx])
+    missing = np.setdiff1d(classes, np.unique(y[test_idx]))
     print('best params:', search.best_params_)
     print(f'best cv macro F1: {search.best_score_:.3f}')
     print(f'held-out accuracy: {accuracy_score(y[test_idx], pred):.3f}')
     print(f'held-out macro F1: {f1_score(y[test_idx], pred, average="macro"):.3f}')
+    print(f'classes absent from the held-out split: {list(missing)}')
     return search

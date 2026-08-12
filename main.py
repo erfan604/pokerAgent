@@ -11,6 +11,7 @@ from match import make_env, play_match
 from classifier import train_classifier, train_mlp_classifier, tune_mlp
 from train import train
 from qlearn import train_qlearn
+from significance import run_significance
 from opponentModeling import OpponentModel, updateFromTrajectory, OPPONENT_FEATURES
 
 
@@ -91,7 +92,7 @@ def opponent_demo(num_hands=200, iters=80, seed=0, out_dir='experiments'):
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
     fig, ax = plt.subplots(figsize=(6, 3.5))
-    ax.barh(names, values)
+    ax.barh(names, values, color='darkgreen')
     ax.set_xlim(0, 1)
     ax.set_xlabel('posterior mean (Beta-Binomial)')
     ax.set_title(f'Estimated opponent tendencies ({num_hands} hands)')
@@ -150,6 +151,7 @@ MODES = {
     'mlp': train_mlp_classifier,
     'tune': tune_mlp,
     'integrated': integrated_demo,
+    'signif': run_significance,
 }
 
 if __name__ == '__main__':

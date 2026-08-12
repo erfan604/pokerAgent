@@ -55,7 +55,7 @@ class OpponentModel:
 def actionName(action, env):
     if hasattr(action, 'name'):
         return action.name
-    return env.actions[action].name
+    return env.actions(int(action)).name
 
 def facedRaise(obs):
     toCall = max(obs['all_chips']) - obs['my_chips']
